@@ -8,6 +8,9 @@
 SCSCL sc;
 
 #define DEBUG_LEVEL 1
+
+bool init_dock();
+
 void debugPrint(int level, const char* format, ...)
 {
     if (level > DEBUG_LEVEL)
@@ -26,6 +29,10 @@ void debugPrint(int level, const char* format, ...)
 enum class DockMode {
     Min,
     Max,
+    absoluteMin,
+    absoluteMax,
+    relativeMin,
+    relativeMax,
     Null
 };
 
@@ -37,8 +44,14 @@ class Servo{
     int default_pos = 511;
     int pos = default_pos;
     int last_pos = default_pos;
+
     int min_pos = 0;
     int max_pos = 1023;
+    int absolute_min = 0;
+    int absolute_max = 1023;
+    int relative_min = 0;
+    int relative_max = 1023;
+
     int mid = 511;
     int direction = 1;
 
@@ -48,11 +61,11 @@ class Servo{
     
     int MAX_LOAD = 500;
     int FEED_FORWARD = 0;
+    int BACKOFF = 2 * DEFAULT_STEP;
     
     static constexpr int default_speed = 1000;
     static constexpr int DEFAULT_STEP = 10;
     static constexpr int POSITION_TOLERANCE = DEFAULT_STEP;
-    static constexpr int BACKOFF = 2 * DEFAULT_STEP;
 
   public:
     static constexpr int d45 = 153;   // int values of popular angles
@@ -89,7 +102,7 @@ class Servo{
     int get_min() {return min_pos;}
     int get_max() {return max_pos;}
     int update_mid() {
-      mid = (max_pos + min_pos) / 2;
+      mid = (absolute_max + absolute_min) / 2;
       debugPrint(2, "Servo [%d] mid updated to %d\n", id, mid);
       return mid;
     }
@@ -223,24 +236,64 @@ class Servo{
 
     virtual bool dock(DockMode mode) {
       read_pos();
-      direction = (mode == DockMode::Min) ? -1 : 1;
+      if (mode == DockMode::absoluteMin || mode == DockMode::relativeMin || mode == DockMode::Min) {
+        direction = -1;
+      } else direction = 1;
+
+      int bound_load = MAX_LOAD;
+      if (mode == DockMode::absoluteMin || mode == DockMode::absoluteMax) {
+        bound_load -= 75;
+        debugPrint(2, "Servo [%d] docking in absolute mode\n", get_id());
+      } else if (mode == DockMode::relativeMin || mode == DockMode::relativeMax) {
+        bound_load -= 125;
+        debugPrint(2, "Servo [%d] docking in relative mode\n", get_id());
+      } else {
+        debugPrint(2, "Servo [%d] docking in normal mode\n", get_id());
+      }
+
 
       for (int i = 0; i <= d300; i += DEFAULT_STEP) {
         pos += DEFAULT_STEP * direction;
         sc.WritePos(get_id(), pos, 0, default_speed);
         delay(short_delay(DEFAULT_STEP, default_speed));
 
-        if (check_overload(MAX_LOAD - 100) || pos < BACKOFF || pos > 1023 - BACKOFF) {
+        if (check_overload(bound_load) || pos < BACKOFF || pos > 1023 - BACKOFF) {
           pos -= BACKOFF * direction;
+
           load = 0;
           sc.WritePos(get_id(), pos, 0, default_speed);
           delay(short_delay(BACKOFF, default_speed));
           debugPrint(1, "Servo [%d] docked at %d\n", get_id(), pos);
 
-          if (mode == DockMode::Min) {
-            min_pos = pos;
-          } else {
-            max_pos = pos;
+          switch (mode) {
+            case DockMode::absoluteMin:
+              absolute_min = pos;
+              min_pos = pos;
+              break;
+            case DockMode::absoluteMax:
+              absolute_max = pos;
+              max_pos = pos;
+              break;
+            case DockMode::relativeMin:
+              relative_min = pos;
+              min_pos = pos;
+              break;
+            case DockMode::relativeMax:
+              relative_max = pos;
+              max_pos = pos;
+              break;
+            case DockMode::Min:
+              absolute_min = pos;
+              relative_min = pos;
+              min_pos = pos;
+              break;
+            case DockMode::Max:
+              absolute_max = pos;
+              relative_max = pos;
+              max_pos = pos;
+              break;
+            default:
+              break;
           }
 
           return true;
@@ -278,7 +331,7 @@ class Roll : public Servo {
 class Grip: public Servo {
   public:
   Grip(int id) : Servo(id) {
-    FEED_FORWARD = 10;
+    FEED_FORWARD = 15;
     MAX_LOAD = 500;
   }
 };
@@ -288,6 +341,7 @@ class Wrist: public Servo {
   Wrist(int id) : Servo(id) {
     FEED_FORWARD = 25;
     MAX_LOAD = 650;
+    BACKOFF = 5 * DEFAULT_STEP;
   }
 };
 
@@ -342,59 +396,77 @@ void setup()
 
 
 
-  delay(5000);
+  for (int i = 0; i < 5; i++) {
+    debugPrint(1, "Docking in %d seconds\n", 5 - i);
+    delay(1000);
+  }
 
   // docking begins
+  if(!init_dock()) {
+    debugPrint(1, "Docking failed\n");
+  } else {
+    debugPrint(1, "Docking successful\n");
+  }
+}
+
+void loop(){
+}
+
+bool init_dock() {
   roll.dock();
   
   debugPrint(1, "Wrist min\n");
   wrist.dock(DockMode::Min);
   
   debugPrint(1, "Grip L(2) min_absolute, Grip R(3) max_absolute\n");
-  gripL.dock(DockMode::Min);
-  gripR.dock(DockMode::Max);
+  gripL.dock(DockMode::absoluteMin);
+  gripR.dock(DockMode::absoluteMax);
   
   debugPrint(1, "Grip L(2) max_relative, Grip R(3) min_relative\n");
-  gripR.dock(DockMode::Min);
-  gripL.dock(DockMode::Max);
+  gripR.dock(DockMode::relativeMin);
+  gripL.dock(DockMode::relativeMax);
   
   debugPrint(1, "Wrist max\n");
   wrist.dock(DockMode::Max);
   
   debugPrint(1, "Grip L(2) max_absolute , Grip R(3) min_absolute\n");
-  gripR.dock(DockMode::Min);
-  gripL.dock(DockMode::Max);
+  gripR.dock(DockMode::absoluteMin);
+  gripL.dock(DockMode::absoluteMax);
   
   debugPrint(1, "Grip L(2) min_relative , Grip R(3) max_relative\n");
-  gripL.dock(DockMode::Min);
-  gripR.dock(DockMode::Max);
+  gripL.dock(DockMode::relativeMin);
+  gripR.dock(DockMode::relativeMax);
 
-  // debugPrint(1, "Grip R min, Grip L max\n");
-  // gripR.dock(DockMode::Min);
-  // gripL.dock(DockMode::Max);
+  debugPrint(1, "Wrist mid\n");
+  wrist.change_target(wrist.update_mid());
+  if (!wrist.move_to_target(1000)) {return false;}
   
-  // wrist.dock(DockMode::Max);
-  // wrist.change_target(wrist.update_mid());
-
-  // if (!wrist.move_to_target(500)) {return;}
-  // debugPrint(1, "Wrist pos is %d\n", wrist.read_pos());
+  debugPrint(1, "Grip L(2) mid , Grip R(3) mid\n");
+  gripR.change_target(gripR.update_mid());
+  gripL.change_target(gripL.update_mid());
+  if (!gripR.move_to_target(1000)) {return false;}
+  if (!gripL.move_to_target(1000)) {return false;}
   
-  // debugPrint(1, "Grip R min, Grip L min\n");
-  // gripR.dock(DockMode::Min);
-  // gripL.dock(DockMode::Min);
-  // gripL.dock(DockMode::Max);
-  // gripL.change_target(gripL.get_min());
-  // if (!gripL.move_to_target(500)) {return;}
-  // gripR.dock(DockMode::Max);
+  debugPrint(1, "Wrist max after 1 second\n");
+  delay(1000);
+  wrist.change_target(wrist.get_max());
+  if (!wrist.move_to_target(1000)) {return false;}
   
-  // gripR.change_target(gripR.update_mid());
-  // gripL.change_target(gripL.update_mid());
-  // if (!gripR.move_to_target(500)) {return;}
-  // if (!gripL.move_to_target(500)) {return;}
+  debugPrint(1, "Wrist min after 1 second\n");
+  delay(1000);
+  wrist.change_target(wrist.get_min());
+  if (!wrist.move_to_target(1000)) {return false;}
   
-  // if (!wrist.move_to_target(500)) {return;}
-  // debugPrint(1, "Wrist pos is %d\n", wrist.read_pos());
-}
-
-void loop(){
+  debugPrint(1, "Wrist mid after 1 second\n");
+  delay(1000);
+  wrist.change_target(wrist.update_mid());
+  if (!wrist.move_to_target(1000)) {return false;}
+  
+  debugPrint(1, "Grip L(2) mid , Grip R(3) mid after 1 second\n");
+  delay(1000);
+  gripL.change_target(gripL.update_mid());
+  gripR.change_target(gripR.update_mid());
+  if (!gripL.move_to_target(1000)) {return false;}
+  if (!gripR.move_to_target(1000)) {return false;}
+  return true;
 }
