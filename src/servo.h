@@ -78,7 +78,7 @@ public:
     int backoff(); // backs off the servo by const BACKOFF, opposite to the last udpated direction
 
 
-    virtual bool dock(DockMode mode);
+    virtual bool dock(DockMode mode = DockMode::Null);
 };
 
 class Roll : public Servo {

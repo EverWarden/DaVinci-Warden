@@ -149,7 +149,8 @@ int Servo::backoff() {
     return short_delay(BACKOFF, default_speed);
 }
 
-bool Servo::dock(DockMode mode) {
+bool Servo::dock(DockMode mode = DockMode::Null) {
+    if (mode == DockMode::Null) {return false;}
     read_pos();
 
     if (mode == DockMode::absoluteMin ||
